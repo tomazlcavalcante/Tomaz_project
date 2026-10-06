@@ -1,0 +1,31 @@
+[project]
+name = "secretario"
+version = "0.1.0"
+description = "Protótipo de secretário/analista com agentes de IA, local por padrão (V0)."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "chainlit>=2.12,<3",
+    "keyring>=25.7,<26",
+    "openai>=3.25,<4",
+    "pydantic>=2.13,<3",
+]
+
+[project.scripts]
+secretario-ui = "secretario.ui.launch:main"
+secretario-cli = "secretario.cli:main"
+secretario-secrets = "secretario.secrets:main"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

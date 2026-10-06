@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Ambiente virtual
+.venv
+
+# Dados locais do agente: banco, anexos, logs. Nunca versionar.
+data/
+
+# Segredos: nunca versionar
+.env
+.env.*
+!.env.example
+
+# Arquivos gerados pelo Chainlit em tempo de execução
+.files/

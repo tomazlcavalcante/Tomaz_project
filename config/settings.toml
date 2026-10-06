@@ -1,0 +1,73 @@
+# Configuração do Secretário V0.
+# Caminhos relativos são resolvidos a partir da pasta do projeto.
+
+[app]
+data_dir = "data"                          # banco, logs; fora do git
+system_prompt_file = "config/system_prompt.md"
+default_model = "local"                    # modelo preferido ao abrir uma conversa
+sensitive_fallback_model = "local"         # usado quando o sigilo não permite o preferido; precisa ser local
+default_label = "publico"                  # nível inicial: publico, interno, confidencial, restrito
+
+[ui]
+host = "127.0.0.1"                         # só loopback: a V0 não tem login
+port = 8000
+
+[limits]
+max_history_messages = 40
+
+# ---------------------------------------------------------------------------
+# Modelos. Cada seção [models.<chave>] é um perfil; troque com /modelo <chave>.
+#
+# max_label = nível máximo de sigilo que o modelo pode receber.
+# Um modelo é considerado LOCAL só se base_url for 127.0.0.1/localhost e o
+# nome não terminar em "cloud" (modelos ":cloud" do Ollama rodam na nuvem).
+# Modelos externos não aceitam max_label acima de "interno" sem
+# allow_sensitive_external = true.
+#
+# max_context_chars = orçamento de caracteres do histórico enviado ao modelo.
+# Para o Ollama, mantenha coerente com OLLAMA_CONTEXT_LENGTH (tokens):
+# em português, conte uns 3 caracteres por token e reserve espaço para a resposta.
+# ---------------------------------------------------------------------------
+
+[models.local]
+display_name = "Qwen3.5 4B (local)"
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3.5:4b"
+max_label = "restrito"
+temperature = 0.6
+max_output_tokens = 1024
+reasoning_effort = "none"                  # sem "pensar" antes de responder: muito mais rápido em CPU
+max_context_chars = 18000                  # cabe em OLLAMA_CONTEXT_LENGTH = 8192
+timeout_s = 300
+
+[models.gemini]
+display_name = "Gemini Flash (nuvem, plano gratuito)"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+model = "gemini-flash-latest"              # se der "modelo não encontrado", use o nome que aparece no AI Studio
+api_key_secret = "GEMINI_API_KEY"          # guardado com: uv run secretario-secrets set GEMINI_API_KEY
+max_label = "publico"                      # plano gratuito: o Google pode usar os dados; só dados públicos/sintéticos
+stream_usage = false
+max_context_chars = 200000
+timeout_s = 120
+
+# Exemplos para depois (descomente e ajuste):
+#
+# [models.local9b]
+# display_name = "Qwen3.5 9B (local)"
+# base_url = "http://127.0.0.1:11434/v1"
+# model = "qwen3.5:9b"
+# max_label = "restrito"
+# reasoning_effort = "none"
+# max_output_tokens = 1024
+# max_context_chars = 18000
+# timeout_s = 600
+#
+# Máquina Ubuntu mais forte na mesma rede: rode o Ollama lá e acesse por
+# túnel SSH (ssh -L 11435:127.0.0.1:11434 usuario@servidor), para o tráfego
+# não passar aberto pela rede. Pelo túnel o endereço continua sendo loopback.
+# [models.servidor]
+# display_name = "Gemma 4 26B (servidor via SSH)"
+# base_url = "http://127.0.0.1:11435/v1"
+# model = "gemma4:26b"
+# max_label = "restrito"
+# max_context_chars = 60000

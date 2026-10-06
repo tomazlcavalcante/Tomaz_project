@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from secretario.core.session import Session
+from secretario.core.types import Label, Message
+from secretario.storage.db import MIGRATIONS, ConversationStore, Database
+
+
+def test_migrations_are_idempotent(tmp_path):
+    path = tmp_path / "x.db"
+    db = Database(path)
+    assert db.schema_version == len(MIGRATIONS)
+    db.close()
+    db2 = Database(path)  # reabrir não reaplica nada
+    assert db2.schema_version == len(MIGRATIONS)
+
+
+def test_roundtrip(tmp_path):
+    store = ConversationStore(Database(tmp_path / "x.db"))
+    s = Session(model_key="local", label=Label.INTERNO)
+    store.save_session(s)
+    store.add_message(s.id, Message(role="user", content="Reunião às 15h, acentuação ç ã é"))
+    store.add_message(s.id, Message(role="assistant", content="Anotado.", model_key="local"))
+    store.set_title_if_empty(s.id, "Primeiro título")
+    store.set_title_if_empty(s.id, "Não substitui")
+
+    loaded = store.load_session(s.id)
+    assert loaded.label == Label.INTERNO
+    assert [m.content for m in loaded.messages] == ["Reunião às 15h, acentuação ç ã é", "Anotado."]
+    assert loaded.messages[1].model_key == "local"
+    assert store.recent_sessions()[0]["title"] == "Primeiro título"
+    assert store.load_session("inexistente") is None
