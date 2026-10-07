@@ -178,6 +178,7 @@ src/secretario/
   tools/notes.py            search_notes, save_note, delete_note
   storage/notes.py          notas com busca FTS5
   evals.py                  executor dos cenários de avaliação
+  synthetic.py              carrega e valida os dados sintéticos
   llm/openai_compat.py      cliente para Ollama, Gemini e afins
   llm/router.py             escolha do modelo pelo sigilo
   llm/think_filter.py       remove blocos <think> do texto
@@ -186,10 +187,11 @@ src/secretario/
   audit/log.py              trilha de auditoria
   ui/                       Chainlit (adaptador fino), proteção de origem, inicialização
   cli.py                    conversa pelo terminal
-tests/                      170 testes, incluindo cliente HTTP real contra servidor simulado e injeção por arquivo
+tests/                      180 testes, incluindo cliente HTTP real contra servidor simulado e injeção por arquivo
 evals/cenarios.toml         cenários de avaliação com o modelo real
+dados_sinteticos/           mundo fictício (Grupo Horizonte) para os experimentos E1 a E5
 ```
 
-## Próximo passo: V2
+## Próximo passo: experimentos
 
-Memória: resumo rolante da conversa, fatos sobre usuário, pessoas e projetos com fonte, ferramenta `recall` e busca híbrida. Memória vinda de conteúdo não confiável passa por revisão.
+O plano deixou de ser por versões (V2, V3...) e passou a ser por hipóteses: ver o documento "Protótipo por Hipóteses (v2)". A ordem é E1 (recibos de ação), E2 (verificador de ações), E3 (verificador de dados), E4 (compartimentos por empresa) e E5 (injeção com canal de saída), todos medidos com os dados de `dados_sinteticos/`.

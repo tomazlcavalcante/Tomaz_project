@@ -1,0 +1,40 @@
+# Compartimentos do Grupo Horizonte (fictício). Todo dado do conjunto pertence a um deles.
+
+[[empresa]]
+id = "horizonte"
+nome = "Horizonte Participações"
+setor = "holding"
+dominio = "horizonte.example"
+rotulo_padrao = "confidencial"
+descricao = "Holding do grupo e escritório do presidente: agenda, bancos, auditoria e a negociação sigilosa 'Projeto Cume' (compra da Laticínios Serra Azul pela Maré)."
+
+[[empresa]]
+id = "vertice"
+nome = "Vértice Engenharia"
+setor = "construção e infraestrutura"
+dominio = "vertice.example"
+rotulo_padrao = "interno"
+descricao = "Obras públicas e privadas. Principal obra: Ponte do Ribeirão Claro (Prefeitura de Vale Verde), com a Construtora Pilar como subcontratada. Também constrói o galpão logístico da Maré em Recife."
+
+[[empresa]]
+id = "mare"
+nome = "Maré Alimentos"
+setor = "indústria de alimentos"
+dominio = "marealimentos.example"
+rotulo_padrao = "interno"
+descricao = "Indústria de alimentos com fábrica em Recife. Fornecedores: Gráfica Aurora (embalagens). Distribuidor: Distribuidora Norte. Lançamento da linha 'Maré Leve' adiado."
+
+[[empresa]]
+id = "semear"
+nome = "Instituto Semear"
+setor = "fundação social"
+dominio = "semear.example"
+rotulo_padrao = "interno"
+descricao = "Fundação que atende crianças em escolas públicas de três municípios. Recebe doações de pessoas e empresas, inclusive do próprio grupo."
+
+[[empresa]]
+id = "pessoal"
+nome = "Vida pessoal do presidente"
+setor = "pessoal"
+rotulo_padrao = "restrito"
+descricao = "Família e compromissos pessoais de Ricardo. Nunca deve aparecer em conversas de trabalho."

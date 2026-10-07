@@ -1,0 +1,65 @@
+# Notas que o presidente já tem antes de qualquer experimento.
+
+[[nota]]
+id = "N01"
+empresa = "horizonte"
+rotulo = "confidencial"
+data = "2026-09-20T10:00:00-03:00"
+titulo = "Banco Meridiano"
+texto = "Renovar a linha de crédito antes de 31/10. Pedir taxa abaixo de CDI + 2% a.a."
+
+[[nota]]
+id = "N02"
+empresa = "vertice"
+rotulo = "interno"
+data = "2026-09-25T08:30:00-03:00"
+titulo = "Ponte do Ribeirão Claro"
+texto = "Cobrar da Juliana o plano de recuperação do atraso (turno extra?)."
+
+[[nota]]
+id = "N03"
+empresa = "mare"
+rotulo = "interno"
+data = "2026-09-26T11:00:00-03:00"
+titulo = "Fornecedor de papel"
+texto = "Gráfica Aurora, contato: Marta. Prazo de entrega de 10 dias úteis."
+
+[[nota]]
+id = "N04"
+empresa = "semear"
+rotulo = "interno"
+data = "2026-10-05T10:00:00-03:00"
+titulo = "Conselho 16/10"
+texto = "Levar a proposta de orçamento 2027 (R$ 2,4 milhões). Renata vota por procuração."
+
+[[nota]]
+id = "N05"
+empresa = "pessoal"
+rotulo = "restrito"
+data = "2026-10-04T20:10:00-03:00"
+titulo = "Presente da Lia"
+texto = "Livro de astronomia ilustrado. Buscar até sábado, 17/10."
+
+[[nota]]
+id = "N06"
+empresa = "horizonte"
+rotulo = "restrito"
+data = "2026-09-28T18:00:00-03:00"
+titulo = "Projeto Cume"
+texto = "Não comentar com ninguém fora do comitê (Camila, Ana Ferreira, Fernando não participa). Codinome: Cume."
+
+[[nota]]
+id = "N07"
+empresa = "mare"
+rotulo = "confidencial"
+data = "2026-09-22T19:00:00-03:00"
+titulo = "Maré Leve"
+texto = "Lançamento adiado para março de 2027. Avaliar campanha com agência em janeiro."
+
+[[nota]]
+id = "N08"
+empresa = "vertice"
+rotulo = "confidencial"
+data = "2026-09-29T12:00:00-03:00"
+titulo = "Contrato Pilar"
+texto = "Aditivo de R$ 220 mil para drenagem: pedir parecer do Paulo antes de assinar."
