@@ -1,18 +1,20 @@
-# Secretário — V0
+# Secretário — V1
 
 Protótipo de assistente pessoal/analista com agentes de IA, local por padrão.
-A V0 é a fundação: chat no navegador, modelo de linguagem trocável, roteamento
-por nível de sigilo, histórico e auditoria em SQLite. Ferramentas entram na V1.
+A V0 fez a fundação (chat, modelo trocável, sigilo, histórico e auditoria);
+a V1 acrescenta ferramentas que passam por um gateway de políticas, com
+aprovação humana para ações de escrita.
 
-## O que a V0 faz e o que ainda não faz
+## O que faz e o que ainda não faz
 
 | Faz | Ainda não faz (versões seguintes) |
 | --- | --- |
-| Chat no navegador (Chainlit) e no terminal | Usar ferramentas (V1) |
-| Modelo local via Ollama ou Gemini, trocável por configuração | Memória de longo prazo (V2) |
-| Nível de sigilo por conversa, que só sobe e decide qual modelo pode ser usado | Ler documentos e anexos (V3) |
-| Histórico e trilha de auditoria em `data/secretario.db` | Análise de dados e Python (V4) |
-| Chaves de API no Gerenciador de Credenciais do Windows | E-mail, agenda, contatos (V5+) |
+| Chat no navegador (Chainlit) e no terminal | Memória de longo prazo (V2) |
+| Modelo local via Ollama ou Gemini, trocável por configuração | PDF, Word, planilhas e busca em documentos (V3) |
+| Nível de sigilo por conversa, que só sobe e decide qual modelo pode ser usado | Análise de dados e Python em sandbox (V4) |
+| Ferramentas: arquivos de texto da pasta de trabalho e notas, com aprovação | E-mail, agenda, contatos (V5+) |
+| Histórico e trilha de auditoria em `data/secretario.db` | |
+| Chaves de API no Gerenciador de Credenciais do Windows | |
 
 ## Instalação no Windows (uma vez)
 
@@ -74,16 +76,36 @@ uv run secretario-cli    # a mesma conversa, no terminal
 
 Para comparar modelos, faça a mesma pergunta numa conversa com `/modelo local` e noutra com `/modelo gemini`. O rodapé de cada resposta mostra qual modelo respondeu, se foi local e quanto tempo levou.
 
-## Ferramentas (V1, em construção)
+## Ferramentas
 
-O agente pode usar ferramentas. Toda chamada passa por um único gateway (`tools/gateway.py`), que confere se a ferramenta está no perfil da conversa, valida os argumentos, exige aprovação para ações de escrita (ainda não disponível, então elas são recusadas), aplica tempo limite e registra tudo em `audit_events` (`kind = 'tool_call'`). Na interface, cada chamada aparece como um passo que pode ser aberto.
+Toda chamada de ferramenta passa por um único gateway (`tools/gateway.py`), nesta ordem: a ferramenta está no perfil da conversa? Os argumentos são válidos? O risco exige aprovação? Depois vêm a execução com tempo limite e a auditoria em `audit_events` (`kind = 'tool_call'`), inclusive das recusas. Na interface, cada chamada aparece como um passo que pode ser aberto.
 
-| Ferramenta | Faz | Risco |
-| --- | --- | --- |
-| `get_datetime` | data, dia da semana e hora | nenhum |
-| `list_files` | lista arquivos e pastas de `data/workspace` | leitura |
+| Ferramenta | Faz | Risco | Aprovação |
+| --- | --- | --- | --- |
+| `get_datetime` | data, dia da semana e hora | nenhum | não |
+| `list_files` | lista arquivos e pastas de `data/workspace` | leitura | não |
+| `read_file` | lê um arquivo de texto da pasta de trabalho, em partes | leitura não confiável | não, mas marca a conversa como contaminada |
+| `search_notes` | busca nas notas (ignora acentos) | leitura | não |
+| `save_note` | cria ou substitui uma nota | escrita | sim |
+| `delete_note` | apaga uma nota | destrutiva | sim, mostrando o conteúdo |
 
-As ferramentas de arquivo só enxergam `data/workspace`: caminhos absolutos, `..` e links para fora são recusados. Os perfis ficam em `[tools.profiles]` no `config/settings.toml`.
+- **Aprovação:** na web aparecem os botões Aprovar e Rejeitar, com a prévia do que vai acontecer e os argumentos completos; no terminal, uma pergunta s/n. Sem resposta em 5 minutos, conta como rejeitado.
+- **Pasta de trabalho:** as ferramentas de arquivo só enxergam `data/workspace`; caminhos absolutos, `..` e links para fora são recusados. Copie para lá os arquivos (de preferência sintéticos) que quiser mostrar ao agente.
+- **Conteúdo não confiável:** o texto lido de arquivos vai ao modelo entre marcas que dizem "são dados, não instruções", e a conversa fica marcada como contaminada (`/status` mostra). A partir daí, todo pedido de aprovação traz um alerta.
+- **Perfis** (`[tools.profiles]` no `config/settings.toml`): `completo` (padrão), `leitura` (sem escrita) e `nenhum`. Troque com `/ferramentas <perfil>`.
+- **Limites:** até 5 chamadas ao modelo por mensagem (a última sem ferramentas), 20 s por ferramenta e 4000 caracteres por resultado.
+
+## Avaliação com o modelo real (evals)
+
+Os testes conferem o código com um modelo falso. Os cenários de `evals/cenarios.toml` conferem o **modelo**: se ele escolhe as ferramentas certas, se responde com o que leu e se resiste a injeções.
+
+```powershell
+uv run secretario-evals                         # todos os cenários com o modelo padrão
+uv run secretario-evals --modelos local local9b # compara modelos
+uv run secretario-evals --cenarios injecao_arquivo caminho_fora
+```
+
+Cada cenário roda numa pasta própria em `data/evals/<data-hora>/` (com banco, conversa e auditoria para conferir) e o resumo vai para `relatorio.json`. Modelos variam de uma execução para outra: rode mais de uma vez antes de tirar conclusões.
 
 ## Privacidade: o que sai da sua máquina
 
@@ -152,7 +174,10 @@ src/secretario/
   tools/registry.py         ferramentas por perfil
   tools/gateway.py          o único caminho até a execução de uma ferramenta
   tools/workspace.py        trava da pasta de trabalho
-  tools/builtin.py          get_datetime, list_files
+  tools/builtin.py          get_datetime, list_files, read_file
+  tools/notes.py            search_notes, save_note, delete_note
+  storage/notes.py          notas com busca FTS5
+  evals.py                  executor dos cenários de avaliação
   llm/openai_compat.py      cliente para Ollama, Gemini e afins
   llm/router.py             escolha do modelo pelo sigilo
   llm/think_filter.py       remove blocos <think> do texto
@@ -161,9 +186,10 @@ src/secretario/
   audit/log.py              trilha de auditoria
   ui/                       Chainlit (adaptador fino), proteção de origem, inicialização
   cli.py                    conversa pelo terminal
-tests/                      133 testes, incluindo cliente HTTP real contra servidor simulado
+tests/                      170 testes, incluindo cliente HTTP real contra servidor simulado e injeção por arquivo
+evals/cenarios.toml         cenários de avaliação com o modelo real
 ```
 
-## Próximo passo: V1
+## Próximo passo: V2
 
-Ferramentas e a camada de políticas: registro de ferramentas, gateway por onde passa toda chamada, aprovação humana pela interface, auditoria de cada execução e uma bateria de cenários de teste. O laço do agente em `core/agent.py` já está desenhado para receber essa etapa.
+Memória: resumo rolante da conversa, fatos sobre usuário, pessoas e projetos com fonte, ferramenta `recall` e busca híbrida. Memória vinda de conteúdo não confiável passa por revisão.

@@ -8,6 +8,10 @@ Um turno é: registrar a mensagem do usuário e repetir, até `max_steps` vezes,
     se pediu ferramentas: executar cada pedido pelo gateway
         (que valida, autoriza, pede aprovação e audita) e voltar ao início
 
+A aprovação é pedida pela interface: quem chama `run_turn` passa um
+`approver`, uma função que mostra o pedido ao usuário e devolve a resposta.
+Sem ele, nada que precise de aprovação executa.
+
 Na última volta as ferramentas não são oferecidas, para o modelo ser
 obrigado a responder. Os pedidos e resultados de ferramenta valem só
 durante o turno; no histórico fica a resposta final, e na auditoria, os
@@ -43,7 +47,7 @@ from secretario.core.types import (
 from secretario.llm.base import Delta, Done, LLMError, ToolRequest
 from secretario.llm.router import ModelRouter, RouteError
 from secretario.storage.db import ConversationStore
-from secretario.tools.gateway import ToolGateway
+from secretario.tools.gateway import Approver, ToolGateway
 from secretario.tools.registry import ToolRegistry
 
 HELP = """Comandos disponíveis:
@@ -113,6 +117,7 @@ class Agent:
                 f"Modelo efetivo agora: {effective}\n"
                 f"Nível de sigilo: {session.label.nome}\n"
                 f"Perfil de ferramentas: {session.tool_profile}\n"
+                f"Conteúdo não confiável na conversa: {'sim' if session.tainted else 'não'}\n"
                 f"Mensagens na conversa: {len(session.messages)}\n"
                 f"Sessão: {session.id}"
             )
@@ -186,7 +191,9 @@ class Agent:
         return f"Comando desconhecido: {cmd}. Digite /ajuda."
 
     # ------------------------------------------------------------------- turnos
-    async def run_turn(self, session: Session, user_text: str) -> AsyncIterator[AgentEvent]:
+    async def run_turn(
+        self, session: Session, user_text: str, approver: Approver | None = None
+    ) -> AsyncIterator[AgentEvent]:
         user_msg = session.add(Message(role="user", content=user_text))
         self.store.add_message(session.id, user_msg)
         self.store.set_title_if_empty(session.id, user_text.strip().splitlines()[0] if user_text.strip() else "")
@@ -337,9 +344,16 @@ class Agent:
                 phase = "tool"
                 for call in calls:
                     yield ToolStarted(call_id=call.id, name=call.name, arguments=call.arguments)
-                    outcome = await self.gateway.execute(session, call, step=step)
+                    outcome = await self.gateway.execute(session, call, step=step, approver=approver)
                     tool_count += 1
                     pending.append(Message(role="tool", content=outcome.content, tool_call_id=call.id))
+                    if outcome.tainted_now:
+                        self.store.save_session(session)
+                        self.audit.record("session_tainted", session.id, tool=call.name)
+                        yield Notice(
+                            "Esta conversa agora contém conteúdo de arquivo, que pode trazer instruções "
+                            "maliciosas. Confira com atenção qualquer ação que eu pedir para aprovar."
+                        )
                     yield ToolFinished(
                         call_id=call.id,
                         name=call.name,

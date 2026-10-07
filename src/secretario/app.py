@@ -14,10 +14,14 @@ from secretario.core.agent import Agent
 from secretario.llm.router import ClientFactory, ModelRouter
 from secretario.llm.openai_compat import OpenAICompatClient
 from secretario.storage.db import ConversationStore, Database
+from secretario.storage.notes import NoteStore
 from secretario.tools.base import Tool
 from secretario.tools.builtin import BUILTIN_TOOLS
 from secretario.tools.gateway import ToolGateway
+from secretario.tools.notes import NOTE_TOOLS
 from secretario.tools.registry import ToolRegistry
+
+ALL_TOOLS: list[Tool] = [*BUILTIN_TOOLS, *NOTE_TOOLS]
 
 
 def setup_logging(settings: Settings) -> None:
@@ -38,18 +42,20 @@ def build_agent(
     settings: Settings | None = None,
     client_factory: ClientFactory = OpenAICompatClient,
     tools: list[Tool] | None = None,
+    configure_logging: bool = True,
 ) -> Agent:
     settings = settings or load_settings()
-    setup_logging(settings)
+    if configure_logging:
+        setup_logging(settings)
     settings.workspace_path.mkdir(parents=True, exist_ok=True)
     db = Database(settings.db_path)
     audit = AuditLog(db)
-    registry = ToolRegistry.from_settings(settings.tools, BUILTIN_TOOLS if tools is None else tools)
+    registry = ToolRegistry.from_settings(settings.tools, ALL_TOOLS if tools is None else tools)
     return Agent(
         settings=settings,
         router=ModelRouter(settings, client_factory),
         store=ConversationStore(db),
         audit=audit,
         tools=registry,
-        gateway=ToolGateway(settings, registry, audit),
+        gateway=ToolGateway(settings, registry, audit, notes=NoteStore(db)),
     )

@@ -49,7 +49,7 @@ def test_specs_in_mcp_and_openai_formats():
 
 def test_risk_decides_approval():
     assert not GET_DATETIME.needs_approval and not LIST_FILES.needs_approval
-    assert {t.risk for t in BUILTIN_TOOLS} <= {Risk.NONE, Risk.READ}
+    assert {t.risk for t in BUILTIN_TOOLS} <= {Risk.NONE, Risk.READ, Risk.READ_UNTRUSTED}
 
 
 # ------------------------------------------------------------------ registro
@@ -69,7 +69,7 @@ def test_settings_profile_must_exist(project):
     from secretario.config import load_settings
 
     path = project / "config" / "settings.toml"
-    path.write_text(path.read_text(encoding="utf-8").replace('profile = "basico"', 'profile = "xyz"'), encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8").replace('profile = "completo"', 'profile = "xyz"'), encoding="utf-8")
     with pytest.raises(ConfigError, match="xyz"):
         load_settings(project)
 

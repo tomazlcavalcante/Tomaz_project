@@ -18,6 +18,9 @@ class Session:
     model_key: str
     label: Label = Label.PUBLICO
     tool_profile: str = "nenhum"  # sem ferramentas, a menos que a configuração diga outra coisa
+    # Contaminada: algum conteúdo não confiável (arquivo, e-mail, web) entrou na conversa.
+    # Como o rótulo de sigilo, só vai de False para True.
+    tainted: bool = False
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: datetime = field(default_factory=utcnow)
     messages: list[Message] = field(default_factory=list)

@@ -6,6 +6,7 @@ configuração e garante que o servidor só escute em 127.0.0.1.
 
 from __future__ import annotations
 
+import json
 from contextlib import aclosing
 
 import chainlit as cl
@@ -14,7 +15,15 @@ from chainlit.utils import utc_now
 
 from secretario.app import build_agent
 from secretario.core.session import Session
-from secretario.core.types import Notice, TextDelta, ToolFinished, ToolStarted, TurnDone, TurnError
+from secretario.core.types import (
+    ApprovalRequest,
+    Notice,
+    TextDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnDone,
+    TurnError,
+)
 from secretario.ui.origin_guard import LocalOriginGuard, local_addresses
 
 AGENT = build_agent()
@@ -23,6 +32,7 @@ _hosts, _origins = local_addresses(AGENT.settings.ui.port)
 chainlit_server.add_middleware(LocalOriginGuard, allowed_hosts=_hosts, allowed_origins=_origins)
 
 SYSTEM_AUTHOR = "Sistema"
+APPROVAL_TIMEOUT_S = 300  # sem resposta nesse tempo = rejeitado
 
 
 def _session() -> Session:
@@ -31,6 +41,37 @@ def _session() -> Session:
         session = AGENT.new_session()
         cl.user_session.set("agent_session", session)
     return session
+
+
+async def ask_approval(request: ApprovalRequest) -> bool:
+    """Mostra o pedido completo com os botões Aprovar e Rejeitar. Sem resposta = rejeitado."""
+    warning = (
+        "\n\n**Atenção:** esta conversa leu conteúdo de arquivo, que pode conter instruções "
+        "maliciosas. Confirme que foi você quem pediu esta ação."
+        if request.tainted
+        else ""
+    )
+    args = json.dumps(request.arguments, ensure_ascii=False, indent=1)
+    body = (
+        f"**Aprovar `{request.tool}`?** (risco: {request.risk}){warning}\n\n"
+        f"````text\n{request.preview}\n````\n\n"
+        f"Argumentos completos:\n````json\n{args}\n````"
+    )
+    ask = cl.AskActionMessage(
+        author=SYSTEM_AUTHOR,
+        content=body,
+        actions=[
+            cl.Action(name="aprovar", payload={"aprovado": True}, label="Aprovar"),
+            cl.Action(name="rejeitar", payload={"aprovado": False}, label="Rejeitar"),
+        ],
+        timeout=APPROVAL_TIMEOUT_S,
+    )
+    answer = await ask.send()
+    approved = bool(answer and answer.get("payload", {}).get("aprovado") is True)
+    verdict = "aprovado" if approved else ("rejeitado" if answer else "sem resposta a tempo, tratado como rejeitado")
+    ask.content = f"{body}\n\n**Resposta:** {verdict}."
+    await ask.update()
+    return approved
 
 
 @cl.on_chat_start
@@ -70,7 +111,7 @@ async def on_message(message: cl.Message) -> None:
     answer = cl.Message(content="")
     steps: dict[str, cl.Step] = {}  # passos de ferramenta abertos, por id do pedido
     # aclosing: se você clicar em parar, o núcleo registra a resposta parcial na hora
-    async with aclosing(AGENT.run_turn(session, text)) as events:
+    async with aclosing(AGENT.run_turn(session, text, approver=ask_approval)) as events:
         async for event in events:
             if isinstance(event, TextDelta):
                 await answer.stream_token(event.text)

@@ -91,9 +91,22 @@ class Message:
         return {"role": self.role, "content": self.content}
 
 
+@dataclass
+class ApprovalRequest:
+    """O que o usuário vê antes de aprovar uma ação de risco: tudo, sem resumir."""
+
+    session_id: str
+    tool: str
+    risk: str
+    arguments: dict  # argumentos completos, já validados
+    preview: str  # o que vai acontecer, descrito pela própria ferramenta
+    tainted: bool  # a conversa já leu conteúdo não confiável (arquivo, e-mail, web)
+
+
 # ---------------------------------------------------------------------------
 # Eventos que o núcleo emite para a interface (UI web, CLI ou testes).
-# A etapa de aprovação da V1 vai acrescentar o pedido de aprovação.
+# O pedido de aprovação não é um evento: a interface entrega ao turno uma
+# função que pergunta ao usuário (ver Approver em tools/gateway.py).
 # ---------------------------------------------------------------------------
 
 

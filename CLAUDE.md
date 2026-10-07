@@ -7,6 +7,8 @@ O documento de arquitetura define o plano; este arquivo guarda as regras que nã
 
 - `uv sync` instala; `uv run pytest` testa (precisa passar sempre, sem Ollama nem chave).
 - `uv run secretario-ui` sobe a interface em 127.0.0.1:8000; `uv run secretario-cli` conversa no terminal.
+- `uv run secretario-evals` roda os cenários de `evals/cenarios.toml` contra o modelo real (precisa de Ollama).
+- Ferramenta nova: função síncrona + modelo Pydantic + `Tool(...)` com o `Risk` certo, registrada em `ALL_TOOLS` (`app.py`) e num perfil; escrita/destrutiva precisam de `preview`. Testes de abuso e um cenário em `evals/`.
 - Dependências: `uv add <pacote>` com limite superior de versão; nunca editar `uv.lock` à mão.
 
 ## Regras de arquitetura

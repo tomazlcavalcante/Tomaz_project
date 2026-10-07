@@ -23,14 +23,16 @@ max_history_messages = 40
 # ---------------------------------------------------------------------------
 
 [tools]
-profile = "basico"                         # perfil das conversas novas
+profile = "completo"                       # perfil das conversas novas
 max_steps = 5                              # chamadas ao modelo por turno; a última já não oferece ferramentas
 timeout_s = 20                             # tempo máximo de cada ferramenta
 max_result_chars = 4000                    # resultado maior é cortado antes de voltar ao modelo
 
+# Escrita e exclusão (save_note, delete_note) sempre pedem aprovação, em qualquer perfil.
 [tools.profiles]
 nenhum = []
-basico = ["get_datetime", "list_files"]
+leitura = ["get_datetime", "list_files", "read_file", "search_notes"]
+completo = ["get_datetime", "list_files", "read_file", "search_notes", "save_note", "delete_note"]
 
 # ---------------------------------------------------------------------------
 # Modelos. Cada seção [models.<chave>] é um perfil; troque com /modelo <chave>.

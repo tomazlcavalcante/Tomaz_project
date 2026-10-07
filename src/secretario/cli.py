@@ -11,7 +11,21 @@ from contextlib import aclosing
 
 from secretario.app import build_agent
 from secretario.config import ConfigError
-from secretario.core.types import Notice, TextDelta, ToolFinished, ToolStarted, TurnDone, TurnError
+from secretario.core.types import ApprovalRequest, Notice, TextDelta, ToolFinished, ToolStarted, TurnDone, TurnError
+
+
+async def ask_approval(request: ApprovalRequest) -> bool:
+    print(f"\n=== Aprovar {request.tool}? (risco: {request.risk}) ===")
+    if request.tainted:
+        print("Atenção: esta conversa leu conteúdo de arquivo, que pode conter instruções maliciosas.")
+    print(request.preview)
+    print("===")
+    loop = asyncio.get_running_loop()
+    try:
+        answer = await loop.run_in_executor(None, input, "Aprovar? [s/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("s", "sim")
 
 
 async def _chat() -> None:
@@ -44,7 +58,7 @@ async def _chat() -> None:
             continue
 
         started = False
-        async with aclosing(agent.run_turn(session, text)) as events:
+        async with aclosing(agent.run_turn(session, text, approver=ask_approval)) as events:
             async for event in events:
                 if isinstance(event, TextDelta):
                     if not started:

@@ -52,6 +52,31 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE sessions ADD COLUMN tool_profile TEXT;
     """,
+    # 3: conversa contaminada; notas com busca de texto (FTS5)
+    """
+    ALTER TABLE sessions ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE notes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL UNIQUE,
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        session_id  TEXT
+    );
+    CREATE VIRTUAL TABLE notes_fts USING fts5(
+        title, body, content='notes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
+        INSERT INTO notes_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
+        INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+    END;
+    CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
+        INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+        INSERT INTO notes_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    """,
 ]
 
 
@@ -95,10 +120,17 @@ class ConversationStore:
 
     def save_session(self, session: Session) -> None:
         self.db.execute(
-            """INSERT INTO sessions (id, created_at, model_key, label, tool_profile) VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO sessions (id, created_at, model_key, label, tool_profile, tainted) VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET model_key = excluded.model_key, label = excluded.label,
-                                             tool_profile = excluded.tool_profile""",
-            (session.id, session.created_at.isoformat(), session.model_key, int(session.label), session.tool_profile),
+                                             tool_profile = excluded.tool_profile, tainted = excluded.tainted""",
+            (
+                session.id,
+                session.created_at.isoformat(),
+                session.model_key,
+                int(session.label),
+                session.tool_profile,
+                int(session.tainted),
+            ),
         )
 
     def add_message(self, session_id: str, message: Message) -> None:
@@ -122,6 +154,7 @@ class ConversationStore:
             model_key=row["model_key"],
             label=Label(row["label"]),
             tool_profile=row["tool_profile"] or "nenhum",  # conversas da V0 não tinham ferramentas
+            tainted=bool(row["tainted"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
         for m in self.db.query("SELECT * FROM messages WHERE session_id = ? ORDER BY id", (session_id,)):

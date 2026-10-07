@@ -28,9 +28,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from secretario.storage.notes import NoteStore
 
 
 class Risk(StrEnum):
@@ -63,6 +66,8 @@ class ToolContext:
     session_id: str
     workspace: Path
     now: Callable[[], datetime]
+    notes: NoteStore | None = None
+    max_chars: int = 4000  # tamanho máximo do resultado que vai ao modelo
 
 
 @dataclass
@@ -73,10 +78,18 @@ class Tool:
     func: Callable[[Any, ToolContext], Any]  # recebe (argumentos validados, contexto); devolve str, dict ou list
     risk: Risk
     timeout_s: float | None = None  # None = o padrão de [tools] timeout_s
+    # Para ferramentas com aprovação: descreve, para o usuário, o que vai acontecer
+    # (ex.: o texto da nota que será apagada). Pode lançar ToolError, e aí nem se pergunta.
+    preview: Callable[[Any, ToolContext], str] | None = None
 
     @property
     def needs_approval(self) -> bool:
         return self.risk in NEEDS_APPROVAL
+
+    @property
+    def untrusted(self) -> bool:
+        """Traz conteúdo de fora (arquivo, e-mail, web): contamina a conversa."""
+        return self.risk == Risk.READ_UNTRUSTED
 
     def input_schema(self) -> dict[str, Any]:
         return _strip_titles(self.args_model.model_json_schema())

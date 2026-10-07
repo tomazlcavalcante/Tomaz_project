@@ -160,16 +160,16 @@ async def test_write_tool_never_runs_without_approver(make_gateway, session, aud
 async def test_approver_decides_with_full_arguments(make_gateway, session):
     seen = []
 
-    async def reject(session, tool, args):
-        seen.append((tool.name, args))
+    async def reject(request):
+        seen.append((request.tool, request.arguments, request.risk))
         return False
 
-    async def approve(session, tool, args):
+    async def approve(request):
         return True
 
     out = await _run(make_gateway(reject), session, "save_note", {"titulo": "x", "texto": "corpo"})
     assert out.decision == gw.REJECTED and EXECUTED_WRITES == []
-    assert seen == [("save_note", {"titulo": "x", "texto": "corpo"})]
+    assert seen == [("save_note", {"titulo": "x", "texto": "corpo"}, "escrita")]
 
     out = await _run(make_gateway(approve), session, "save_note", {"titulo": "x"})
     assert out.ok and EXECUTED_WRITES == ["x"]
@@ -204,7 +204,7 @@ async def test_big_result_is_cut(make_gateway, session, settings, audit):
 async def test_audit_keeps_long_arguments_out(make_gateway, session, audit):
     texto = "conteúdo confidencial " * 50
 
-    async def approve(session, tool, args):
+    async def approve(request):
         return True
 
     await _run(make_gateway(approve), session, "save_note", {"titulo": "curto", "texto": texto})
