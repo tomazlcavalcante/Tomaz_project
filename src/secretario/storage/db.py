@@ -48,6 +48,10 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_audit_session ON audit_events(session_id, id);
     CREATE INDEX idx_audit_kind ON audit_events(kind, id);
     """,
+    # 2: perfil de ferramentas de cada conversa (V1)
+    """
+    ALTER TABLE sessions ADD COLUMN tool_profile TEXT;
+    """,
 ]
 
 
@@ -91,9 +95,10 @@ class ConversationStore:
 
     def save_session(self, session: Session) -> None:
         self.db.execute(
-            """INSERT INTO sessions (id, created_at, model_key, label) VALUES (?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET model_key = excluded.model_key, label = excluded.label""",
-            (session.id, session.created_at.isoformat(), session.model_key, int(session.label)),
+            """INSERT INTO sessions (id, created_at, model_key, label, tool_profile) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET model_key = excluded.model_key, label = excluded.label,
+                                             tool_profile = excluded.tool_profile""",
+            (session.id, session.created_at.isoformat(), session.model_key, int(session.label), session.tool_profile),
         )
 
     def add_message(self, session_id: str, message: Message) -> None:
@@ -116,6 +121,7 @@ class ConversationStore:
             id=row["id"],
             model_key=row["model_key"],
             label=Label(row["label"]),
+            tool_profile=row["tool_profile"] or "nenhum",  # conversas da V0 não tinham ferramentas
             created_at=datetime.fromisoformat(row["created_at"]),
         )
         for m in self.db.query("SELECT * FROM messages WHERE session_id = ? ORDER BY id", (session_id,)):

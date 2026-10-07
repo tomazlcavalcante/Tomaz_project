@@ -1,13 +1,17 @@
 """Núcleo do agente.
 
-Na V0, um turno é: registrar a mensagem, escolher o modelo pelo sigilo,
-montar o contexto, transmitir a resposta, registrar resposta e auditoria.
-Na V1 este mesmo laço ganha a etapa de ferramentas:
+Um turno é: registrar a mensagem do usuário e repetir, até `max_steps` vezes,
 
-    for passo in range(max_passos):
-        resposta = llm(contexto, ferramentas_do_perfil)
-        se não pediu ferramenta: fim
-        para cada pedido: gateway.execute(pedido)   # valida, autoriza, aprova, audita
+    escolher o modelo pelo sigilo e montar o contexto (a cada passo)
+    chamar o modelo, oferecendo as ferramentas do perfil da sessão
+    se ele respondeu com texto: registrar a resposta e terminar
+    se pediu ferramentas: executar cada pedido pelo gateway
+        (que valida, autoriza, pede aprovação e audita) e voltar ao início
+
+Na última volta as ferramentas não são oferecidas, para o modelo ser
+obrigado a responder. Os pedidos e resultados de ferramenta valem só
+durante o turno; no histórico fica a resposta final, e na auditoria, os
+metadados de cada chamada.
 
 Nada aqui conhece Chainlit, terminal ou HTTP: a interface consome os
 eventos de `run_turn`.
@@ -16,13 +20,14 @@ eventos de `run_turn`.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 
 from secretario.audit.log import AuditLog
 from secretario.config import Settings
-from secretario.core.context import build_context, render_system_prompt
+from secretario.core.context import ContextOverflow, build_context, render_system_prompt
 from secretario.core.session import LabelError, Session
 from secretario.core.types import (
     AgentEvent,
@@ -30,36 +35,60 @@ from secretario.core.types import (
     Message,
     Notice,
     TextDelta,
+    ToolFinished,
+    ToolStarted,
     TurnDone,
     TurnError,
 )
-from secretario.llm.base import Delta, Done, LLMError
+from secretario.llm.base import Delta, Done, LLMError, ToolRequest
 from secretario.llm.router import ModelRouter, RouteError
 from secretario.storage.db import ConversationStore
+from secretario.tools.gateway import ToolGateway
+from secretario.tools.registry import ToolRegistry
 
 HELP = """Comandos disponíveis:
 /status            mostra modelo, nível de sigilo e tamanho da conversa
 /modelos           lista os modelos configurados
 /modelo <chave>    troca o modelo preferido (ex.: /modelo gemini)
 /sigilo <nível>    sobe o nível de sigilo: publico, interno, confidencial, restrito
+/ferramentas       lista as ferramentas desta conversa
+/ferramentas <p>   troca o perfil de ferramentas (ex.: /ferramentas nenhum)
 /historico         lista as conversas recentes
 /ajuda             mostra esta lista"""
 
 
 class Agent:
-    def __init__(self, settings: Settings, router: ModelRouter, store: ConversationStore, audit: AuditLog):
+    def __init__(
+        self,
+        settings: Settings,
+        router: ModelRouter,
+        store: ConversationStore,
+        audit: AuditLog,
+        tools: ToolRegistry,
+        gateway: ToolGateway,
+    ):
         self.settings = settings
         self.router = router
         self.store = store
         self.audit = audit
+        self.tools = tools
+        self.gateway = gateway
         self._system_prompt = settings.system_prompt()
 
     # ------------------------------------------------------------------ sessões
     def new_session(self) -> Session:
-        session = Session(model_key=self.settings.app.default_model, label=self.settings.app.default_label)
+        session = Session(
+            model_key=self.settings.app.default_model,
+            label=self.settings.app.default_label,
+            tool_profile=self.settings.tools.profile,
+        )
         self.store.save_session(session)
         self.audit.record(
-            "session_started", session.id, model_key=session.model_key, label=session.label.nome
+            "session_started",
+            session.id,
+            model_key=session.model_key,
+            label=session.label.nome,
+            tool_profile=session.tool_profile,
         )
         return session
 
@@ -83,6 +112,7 @@ class Agent:
                 f"Modelo preferido: {profile.display_name} — {'local' if profile.is_local else 'externo'}\n"
                 f"Modelo efetivo agora: {effective}\n"
                 f"Nível de sigilo: {session.label.nome}\n"
+                f"Perfil de ferramentas: {session.tool_profile}\n"
                 f"Mensagens na conversa: {len(session.messages)}\n"
                 f"Sessão: {session.id}"
             )
@@ -125,6 +155,23 @@ class Agent:
                 self.audit.record("label_raised", session.id, label=new.nome)
             return f"Nível de sigilo: {session.label.nome}."
 
+        if cmd == "/ferramentas":
+            if arg:
+                if arg not in self.tools.profiles:
+                    return f"Perfil desconhecido: {arg!r}. Perfis: {', '.join(self.tools.profiles)}."
+                session.tool_profile = arg
+                self.store.save_session(session)
+                self.audit.record("tool_profile_selected", session.id, tool_profile=arg)
+            lines = [f"Perfil de ferramentas: {session.tool_profile}"]
+            tools = self.tools.for_profile(session.tool_profile)
+            if not tools:
+                lines.append("  (nenhuma ferramenta: o modelo só conversa)")
+            for t in tools:
+                approval = ", pede aprovação" if t.needs_approval else ""
+                lines.append(f"  {t.name:<14} risco: {t.risk.value}{approval}")
+            lines.append(f"Perfis: {', '.join(self.tools.profiles)}. Troque com /ferramentas <perfil>.")
+            return "\n".join(lines)
+
         if cmd == "/historico":
             rows = self.store.recent_sessions(10)
             if not rows:
@@ -144,107 +191,191 @@ class Agent:
         self.store.add_message(session.id, user_msg)
         self.store.set_title_if_empty(session.id, user_text.strip().splitlines()[0] if user_text.strip() else "")
 
-        try:
-            decision = self.router.route(session)
-        except RouteError as exc:
-            self.audit.record("route_refused", session.id, label=session.label.nome, reason=str(exc))
-            yield TurnError(str(exc))
-            return
-
-        profile = decision.profile
-        if decision.fell_back:
-            self.audit.record(
-                "route_fallback",
-                session.id,
-                preferred=session.model_key,
-                used=profile.key,
-                label=session.label.nome,
-            )
-            yield Notice(decision.reason or "Usando o modelo local de reserva.")
-
+        specs = [t.openai_spec() for t in self.tools.for_profile(session.tool_profile)]
+        specs_chars = len(json.dumps(specs, ensure_ascii=False)) if specs else 0
+        max_steps = self.settings.tools.max_steps
         system = render_system_prompt(self._system_prompt, datetime.now().astimezone())
-        ctx = build_context(
-            session,
-            system,
-            max_chars=profile.max_context_chars,
-            max_messages=self.settings.limits.max_history_messages,
-        )
-        if ctx.truncated_last:
-            yield Notice("Sua mensagem é maior que o limite de contexto deste modelo; o meio dela foi omitido.")
 
-        client = self.router.client_for(profile)
-        started = time.perf_counter()
-        parts: list[str] = []
+        pending: list[Message] = []  # pedidos e resultados de ferramenta deste turno
+        shown: list[str] = []  # todo o texto que o usuário já viu neste turno
+        turn_started = time.perf_counter()
+        tool_count = 0
+        warned_fallback = False
         finished = False
-        base_audit = {
-            "model_key": profile.key,
-            "model": profile.model,
-            "is_local": profile.is_local,
-            "label": session.label.nome,
-            "prompt_chars": ctx.chars,
-            "history_dropped": ctx.dropped,
-        }
+        phase = "model"  # "model" ou "tool": onde o turno estava se for interrompido
+        base_audit: dict = {}
+        step_started = turn_started
 
         try:
-            async for event in client.stream_chat(ctx.messages):
-                if isinstance(event, Delta):
-                    parts.append(event.text)
-                    yield TextDelta(event.text)
-                elif isinstance(event, Done):
-                    finished = True
-                    latency = time.perf_counter() - started
-                    answer = "".join(parts).strip()
-                    reply = session.add(Message(role="assistant", content=answer, model_key=profile.key))
-                    self.store.add_message(session.id, reply)
+            for step in range(1, max_steps + 1):
+                phase = "model"
+                try:
+                    decision = self.router.route(session)
+                except RouteError as exc:
+                    self.audit.record("route_refused", session.id, label=session.label.nome, reason=str(exc))
+                    yield TurnError(str(exc))
+                    return
+
+                profile = decision.profile
+                if decision.fell_back and not warned_fallback:
+                    warned_fallback = True
+                    self.audit.record(
+                        "route_fallback",
+                        session.id,
+                        preferred=session.model_key,
+                        used=profile.key,
+                        label=session.label.nome,
+                    )
+                    yield Notice(decision.reason or "Usando o modelo local de reserva.")
+
+                # Na última volta, sem ferramentas: o modelo precisa responder.
+                offer = specs if specs and step < max_steps else None
+                try:
+                    ctx = build_context(
+                        session,
+                        system,
+                        max_chars=profile.max_context_chars,
+                        max_messages=self.settings.limits.max_history_messages,
+                        pending=pending,
+                        reserved_chars=specs_chars if offer else 0,
+                    )
+                except ContextOverflow as exc:
+                    self.audit.record("context_overflow", session.id, model_key=profile.key, step=step)
+                    yield TurnError(str(exc))
+                    return
+                if ctx.truncated_last and step == 1:
+                    yield Notice("Sua mensagem é maior que o limite de contexto deste modelo; o meio dela foi omitido.")
+
+                client = self.router.client_for(profile)
+                step_started = time.perf_counter()
+                parts: list[str] = []
+                calls = []
+                done: Done | None = None
+                base_audit = {
+                    "model_key": profile.key,
+                    "model": profile.model,
+                    "is_local": profile.is_local,
+                    "label": session.label.nome,
+                    "prompt_chars": ctx.chars,
+                    "history_dropped": ctx.dropped,
+                    "step": step,
+                    "tools_offered": len(offer or []),
+                }
+
+                try:
+                    async for event in client.stream_chat(ctx.messages, tools=offer):
+                        if isinstance(event, Delta):
+                            if not parts and shown and not shown[-1].endswith("\n"):
+                                # separa o texto deste passo do texto do passo anterior
+                                shown.append("\n\n")
+                                yield TextDelta("\n\n")
+                            parts.append(event.text)
+                            shown.append(event.text)
+                            yield TextDelta(event.text)
+                        elif isinstance(event, ToolRequest):
+                            calls = event.calls
+                        elif isinstance(event, Done):
+                            done = event
+                except LLMError as exc:
                     self.audit.record(
                         "llm_call",
                         session.id,
                         **base_audit,
-                        ok=True,
-                        provider_model=event.model,
-                        latency_ms=round(latency * 1000),
-                        completion_chars=len(answer),
-                        prompt_tokens=event.prompt_tokens,
-                        completion_tokens=event.completion_tokens,
-                        finish_reason=event.finish_reason,
+                        ok=False,
+                        error_kind=exc.kind,
+                        latency_ms=round((time.perf_counter() - step_started) * 1000),
                     )
+                    yield TurnError(str(exc))
+                    return
+
+                done = done or Done(model=profile.model, finish_reason=None, prompt_tokens=None, completion_tokens=None)
+                step_text = "".join(parts).strip()
+                self.audit.record(
+                    "llm_call",
+                    session.id,
+                    **base_audit,
+                    ok=True,
+                    provider_model=done.model,
+                    latency_ms=round((time.perf_counter() - step_started) * 1000),
+                    completion_chars=len(step_text),
+                    prompt_tokens=done.prompt_tokens,
+                    completion_tokens=done.completion_tokens,
+                    finish_reason=done.finish_reason,
+                    tool_calls=len(calls),
+                )
+
+                if not calls:
+                    answer = "".join(shown).strip()
+                    reply = session.add(Message(role="assistant", content=answer, model_key=profile.key))
+                    self.store.add_message(session.id, reply)
+                    finished = True
                     yield TurnDone(
                         model_key=profile.key,
                         model_display=profile.display_name,
                         is_local=profile.is_local,
-                        latency_s=latency,
-                        prompt_tokens=event.prompt_tokens,
-                        completion_tokens=event.completion_tokens,
-                        finish_reason=event.finish_reason,
+                        latency_s=time.perf_counter() - turn_started,
+                        prompt_tokens=done.prompt_tokens,
+                        completion_tokens=done.completion_tokens,
+                        finish_reason=done.finish_reason,
+                        tool_calls=tool_count,
                     )
-        except LLMError as exc:
-            self.audit.record(
-                "llm_call",
-                session.id,
-                **base_audit,
-                ok=False,
-                error_kind=exc.kind,
-                latency_ms=round((time.perf_counter() - started) * 1000),
-            )
-            yield TurnError(str(exc))
+                    return
+
+                if offer is None:
+                    # Pediu ferramenta sem que nenhuma tivesse sido oferecida.
+                    self.audit.record("tool_request_refused", session.id, step=step, max_steps=max_steps)
+                    if specs:
+                        yield TurnError(
+                            f"O modelo continuou pedindo ferramentas depois do limite de {max_steps} passos. "
+                            "Tente um pedido mais simples ou divida-o em partes."
+                        )
+                    else:
+                        yield TurnError("O modelo tentou usar uma ferramenta, mas esta conversa não tem ferramentas.")
+                    return
+
+                pending.append(Message(role="assistant", content=step_text, model_key=profile.key, tool_calls=calls))
+                phase = "tool"
+                for call in calls:
+                    yield ToolStarted(call_id=call.id, name=call.name, arguments=call.arguments)
+                    outcome = await self.gateway.execute(session, call, step=step)
+                    tool_count += 1
+                    pending.append(Message(role="tool", content=outcome.content, tool_call_id=call.id))
+                    yield ToolFinished(
+                        call_id=call.id,
+                        name=call.name,
+                        ok=outcome.ok,
+                        decision=outcome.decision,
+                        output=outcome.content,
+                        duration_s=outcome.duration_s,
+                    )
+                if step + 1 == max_steps:
+                    yield Notice(
+                        f"Limite de {max_steps} passos por mensagem: o modelo vai responder agora, sem mais ferramentas."
+                    )
         except (asyncio.CancelledError, GeneratorExit):
             # Usuário clicou em parar (a tarefa é cancelada, ou quem consome fecha
             # este gerador): guarda o que já tinha chegado e registra. Sem await aqui.
             if finished:
                 raise
-            partial = "".join(parts).strip()
+            partial = "".join(shown).strip()
             if partial:
                 reply = session.add(
-                    Message(role="assistant", content=partial + "\n\n[interrompido]", model_key=profile.key)
+                    Message(
+                        role="assistant",
+                        content=partial + "\n\n[interrompido]",
+                        model_key=base_audit.get("model_key"),
+                    )
                 )
                 self.store.add_message(session.id, reply)
-            self.audit.record(
-                "llm_call",
-                session.id,
-                **base_audit,
-                ok=False,
-                error_kind="cancelled",
-                completion_chars=len(partial),
-                latency_ms=round((time.perf_counter() - started) * 1000),
-            )
+            if phase == "model" and base_audit:
+                self.audit.record(
+                    "llm_call",
+                    session.id,
+                    **base_audit,
+                    ok=False,
+                    error_kind="cancelled",
+                    completion_chars=len(partial),
+                    latency_ms=round((time.perf_counter() - step_started) * 1000),
+                )
+            self.audit.record("turn_cancelled", session.id, phase=phase, tool_calls=tool_count)
             raise

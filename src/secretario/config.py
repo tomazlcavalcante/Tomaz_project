@@ -91,6 +91,7 @@ class ModelProfile(Strict):
 
 class AppSettings(Strict):
     data_dir: Path = Path("data")
+    workspace_dir: Path = Path("data") / "workspace"  # única pasta que as ferramentas enxergam
     system_prompt_file: Path = Path("config") / "system_prompt.md"
     default_model: str
     sensitive_fallback_model: str
@@ -121,10 +122,25 @@ class Limits(Strict):
     max_history_messages: int = Field(default=40, ge=2)
 
 
+class ToolSettings(Strict):
+    profile: str = "nenhum"  # perfil das conversas novas
+    max_steps: int = Field(default=5, ge=2, le=20)  # chamadas ao modelo por turno; a última é sem ferramentas
+    timeout_s: float = Field(default=20.0, gt=0)  # por chamada de ferramenta
+    max_result_chars: int = Field(default=4000, ge=200)  # resultado maior é cortado antes de ir ao modelo
+    profiles: dict[str, list[str]] = Field(default_factory=lambda: {"nenhum": []})
+
+    @model_validator(mode="after")
+    def _check_profile(self):
+        if self.profile not in self.profiles:
+            raise ValueError(f"tools.profile = {self.profile!r} não existe em [tools.profiles].")
+        return self
+
+
 class Settings(Strict):
     app: AppSettings
     ui: UISettings = UISettings()
     limits: Limits = Limits()
+    tools: ToolSettings = ToolSettings()
     models: dict[str, ModelProfile]
 
     root: Path = Path(".")  # raiz do projeto; preenchida por load_settings
@@ -152,6 +168,10 @@ class Settings(Strict):
     @property
     def db_path(self) -> Path:
         return self.data_path / "secretario.db"
+
+    @property
+    def workspace_path(self) -> Path:
+        return (self.root / self.app.workspace_dir).resolve()
 
     @property
     def system_prompt_path(self) -> Path:

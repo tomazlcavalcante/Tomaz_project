@@ -1,12 +1,14 @@
 """Monta o que vai para o modelo em cada chamada.
 
 O contexto é reconstruído a cada passo, não acumulado: prompt de sistema
-+ as mensagens mais recentes que couberem no orçamento do modelo. Na V2
-entram aqui o resumo rolante e os fatos recuperados da memória.
++ as mensagens mais recentes que couberem no orçamento do modelo + as
+mensagens de ferramenta do turno em andamento. Na V2 entram aqui o resumo
+rolante e os fatos recuperados da memória.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,7 +26,11 @@ class BuiltContext:
 
     @property
     def chars(self) -> int:
-        return sum(len(m.content) for m in self.messages)
+        return sum(m.size for m in self.messages)
+
+
+class ContextOverflow(ValueError):
+    """Nem o prompt de sistema e as mensagens obrigatórias do turno cabem no limite do modelo."""
 
 
 WEEKDAYS = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
@@ -42,11 +48,21 @@ def build_context(
     *,
     max_chars: int,
     max_messages: int,
+    pending: Sequence[Message] = (),
+    reserved_chars: int = 0,
 ) -> BuiltContext:
+    """`pending`: pedidos e resultados de ferramenta do turno atual; vão inteiros, no fim.
+    `reserved_chars`: espaço já ocupado por outras coisas (ex.: a descrição das ferramentas).
+    """
     system = Message(role="system", content=system_prompt)
-    budget = max_chars - len(system.content)
+    budget = max_chars - len(system.content) - reserved_chars
     if budget <= 0:
-        raise ValueError("O prompt de sistema sozinho já excede o limite de contexto do modelo.")
+        raise ContextOverflow("O prompt de sistema sozinho já excede o limite de contexto do modelo.")
+    budget -= sum(m.size for m in pending)
+    if budget <= 0:
+        raise ContextOverflow(
+            "Os resultados das ferramentas deste turno passaram do limite de contexto do modelo."
+        )
 
     all_history = [m for m in session.messages if m.role != "system"]
     history = all_history[-max_messages:]
@@ -55,7 +71,7 @@ def build_context(
     used = 0
     truncated_last = False
     for msg in reversed(history):
-        size = len(msg.content)
+        size = msg.size
         if used + size <= budget:
             kept.append(msg)
             used += size
@@ -77,7 +93,7 @@ def build_context(
         kept.pop(0)
 
     return BuiltContext(
-        messages=[system, *kept],
+        messages=[system, *kept, *pending],
         dropped=len(all_history) - len(kept),
         truncated_last=truncated_last,
     )

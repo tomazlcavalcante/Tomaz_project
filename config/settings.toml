@@ -1,8 +1,9 @@
-# Configuração do Secretário V0.
+# Configuração do Secretário (V0 + V1 em construção).
 # Caminhos relativos são resolvidos a partir da pasta do projeto.
 
 [app]
 data_dir = "data"                          # banco, logs; fora do git
+workspace_dir = "data/workspace"           # única pasta que as ferramentas de arquivo enxergam
 system_prompt_file = "config/system_prompt.md"
 default_model = "local"                    # modelo preferido ao abrir uma conversa
 sensitive_fallback_model = "local"         # usado quando o sigilo não permite o preferido; precisa ser local
@@ -14,6 +15,22 @@ port = 8000
 
 [limits]
 max_history_messages = 40
+
+# ---------------------------------------------------------------------------
+# Ferramentas (V1). Toda chamada passa pelo gateway em tools/gateway.py:
+# perfil -> validação dos argumentos -> risco/aprovação -> execução com
+# tempo limite -> auditoria. Troque o perfil da conversa com /ferramentas <perfil>.
+# ---------------------------------------------------------------------------
+
+[tools]
+profile = "basico"                         # perfil das conversas novas
+max_steps = 5                              # chamadas ao modelo por turno; a última já não oferece ferramentas
+timeout_s = 20                             # tempo máximo de cada ferramenta
+max_result_chars = 4000                    # resultado maior é cortado antes de voltar ao modelo
+
+[tools.profiles]
+nenhum = []
+basico = ["get_datetime", "list_files"]
 
 # ---------------------------------------------------------------------------
 # Modelos. Cada seção [models.<chave>] é um perfil; troque com /modelo <chave>.

@@ -43,11 +43,23 @@ class Label(IntEnum):
         return {0: "público", 1: "interno", 2: "confidencial", 3: "restrito"}[int(self)]
 
 
-Role = Literal["system", "user", "assistant"]
+Role = Literal["system", "user", "assistant", "tool"]
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@dataclass
+class ToolCall:
+    """Pedido de ferramenta feito pelo modelo. `arguments` é o JSON cru, ainda não validado."""
+
+    id: str
+    name: str
+    arguments: str
+
+    def to_api(self) -> dict:
+        return {"id": self.id, "type": "function", "function": {"name": self.name, "arguments": self.arguments}}
 
 
 @dataclass
@@ -56,15 +68,32 @@ class Message:
     content: str
     created_at: datetime = field(default_factory=utcnow)
     model_key: str | None = None  # qual perfil de modelo gerou (só para assistant)
+    # Só nas mensagens do turno em andamento (não vão para o banco):
+    tool_calls: list[ToolCall] = field(default_factory=list)  # assistant pedindo ferramentas
+    tool_call_id: str | None = None  # resposta de ferramenta (role "tool")
 
-    def to_api(self) -> dict[str, str]:
+    @property
+    def size(self) -> int:
+        """Caracteres que esta mensagem ocupa no contexto do modelo."""
+        return len(self.content) + sum(len(c.name) + len(c.arguments) for c in self.tool_calls)
+
+    def to_api(self) -> dict:
         """Formato aceito pelas APIs compatíveis com OpenAI."""
+        if self.tool_calls:
+            # Alguns provedores rejeitam texto vazio junto com pedidos de ferramenta.
+            return {
+                "role": self.role,
+                "content": self.content or None,
+                "tool_calls": [c.to_api() for c in self.tool_calls],
+            }
+        if self.tool_call_id is not None:
+            return {"role": self.role, "content": self.content, "tool_call_id": self.tool_call_id}
         return {"role": self.role, "content": self.content}
 
 
 # ---------------------------------------------------------------------------
 # Eventos que o núcleo emite para a interface (UI web, CLI ou testes).
-# A V1 vai acrescentar eventos de ferramenta e de pedido de aprovação.
+# A etapa de aprovação da V1 vai acrescentar o pedido de aprovação.
 # ---------------------------------------------------------------------------
 
 
@@ -83,6 +112,25 @@ class TextDelta:
 
 
 @dataclass
+class ToolStarted:
+    """O modelo pediu uma ferramenta; o gateway vai decidir se ela roda."""
+
+    call_id: str
+    name: str
+    arguments: str
+
+
+@dataclass
+class ToolFinished:
+    call_id: str
+    name: str
+    ok: bool
+    decision: str  # ex.: "executed", "invalid_args", "denied_not_in_profile" (ver tools/gateway.py)
+    output: str  # o que o modelo recebeu de volta
+    duration_s: float
+
+
+@dataclass
 class TurnDone:
     model_key: str
     model_display: str
@@ -91,6 +139,7 @@ class TurnDone:
     prompt_tokens: int | None
     completion_tokens: int | None
     finish_reason: str | None
+    tool_calls: int = 0  # quantas ferramentas foram pedidas no turno
 
 
 @dataclass
@@ -98,4 +147,4 @@ class TurnError:
     message: str
 
 
-AgentEvent = Notice | TextDelta | TurnDone | TurnError
+AgentEvent = Notice | TextDelta | ToolStarted | ToolFinished | TurnDone | TurnError

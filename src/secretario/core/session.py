@@ -1,4 +1,4 @@
-"""Estado de uma conversa: histórico, modelo preferido e rótulo de sigilo."""
+"""Estado de uma conversa: histórico, modelo preferido, rótulo de sigilo e perfil de ferramentas."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ class LabelError(ValueError):
 class Session:
     model_key: str
     label: Label = Label.PUBLICO
+    tool_profile: str = "nenhum"  # sem ferramentas, a menos que a configuração diga outra coisa
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: datetime = field(default_factory=utcnow)
     messages: list[Message] = field(default_factory=list)

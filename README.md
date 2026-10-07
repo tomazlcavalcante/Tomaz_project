@@ -68,10 +68,22 @@ uv run secretario-cli    # a mesma conversa, no terminal
 | `/modelos` | Lista os modelos configurados e o que cada um aceita |
 | `/modelo gemini` | Troca o modelo preferido da conversa |
 | `/sigilo confidencial` | Sobe o nível: `publico`, `interno`, `confidencial`, `restrito` |
+| `/ferramentas` | Ferramentas desta conversa; `/ferramentas nenhum` desliga |
 | `/historico` | Conversas recentes |
 | `/ajuda` | Lista de comandos |
 
 Para comparar modelos, faça a mesma pergunta numa conversa com `/modelo local` e noutra com `/modelo gemini`. O rodapé de cada resposta mostra qual modelo respondeu, se foi local e quanto tempo levou.
+
+## Ferramentas (V1, em construção)
+
+O agente pode usar ferramentas. Toda chamada passa por um único gateway (`tools/gateway.py`), que confere se a ferramenta está no perfil da conversa, valida os argumentos, exige aprovação para ações de escrita (ainda não disponível, então elas são recusadas), aplica tempo limite e registra tudo em `audit_events` (`kind = 'tool_call'`). Na interface, cada chamada aparece como um passo que pode ser aberto.
+
+| Ferramenta | Faz | Risco |
+| --- | --- | --- |
+| `get_datetime` | data, dia da semana e hora | nenhum |
+| `list_files` | lista arquivos e pastas de `data/workspace` | leitura |
+
+As ferramentas de arquivo só enxergam `data/workspace`: caminhos absolutos, `..` e links para fora são recusados. Os perfis ficam em `[tools.profiles]` no `config/settings.toml`.
 
 ## Privacidade: o que sai da sua máquina
 
@@ -136,6 +148,11 @@ src/secretario/
   core/context.py           o que vai para o modelo a cada chamada
   core/session.py           conversa, modelo preferido, nível de sigilo
   core/types.py             tipos e eventos compartilhados
+  tools/base.py             o que é uma ferramenta: argumentos, risco, esquema
+  tools/registry.py         ferramentas por perfil
+  tools/gateway.py          o único caminho até a execução de uma ferramenta
+  tools/workspace.py        trava da pasta de trabalho
+  tools/builtin.py          get_datetime, list_files
   llm/openai_compat.py      cliente para Ollama, Gemini e afins
   llm/router.py             escolha do modelo pelo sigilo
   llm/think_filter.py       remove blocos <think> do texto
@@ -144,7 +161,7 @@ src/secretario/
   audit/log.py              trilha de auditoria
   ui/                       Chainlit (adaptador fino), proteção de origem, inicialização
   cli.py                    conversa pelo terminal
-tests/                      77 testes, incluindo cliente HTTP real contra servidor simulado
+tests/                      133 testes, incluindo cliente HTTP real contra servidor simulado
 ```
 
 ## Próximo passo: V1

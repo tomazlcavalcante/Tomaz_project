@@ -15,8 +15,8 @@ import openai
 from openai import AsyncOpenAI
 
 from secretario.config import ModelProfile
-from secretario.core.types import Message
-from secretario.llm.base import Delta, Done, LLMError, LLMEvent
+from secretario.core.types import Message, ToolCall
+from secretario.llm.base import Delta, Done, LLMError, LLMEvent, ToolRequest
 from secretario.llm.think_filter import ThinkFilter
 from secretario.secrets import SecretNotFound, get_secret
 
@@ -46,13 +46,15 @@ class OpenAICompatClient:
             )
         return self._client
 
-    def _request_kwargs(self, messages: Sequence[Message]) -> dict[str, Any]:
+    def _request_kwargs(self, messages: Sequence[Message], tools: list[dict[str, Any]] | None) -> dict[str, Any]:
         p = self.profile
         kwargs: dict[str, Any] = {
             "model": p.model,
             "messages": [m.to_api() for m in messages],
             "stream": True,
         }
+        if tools:
+            kwargs["tools"] = tools
         if p.stream_usage:
             kwargs["stream_options"] = {"include_usage": True}
         if p.temperature is not None:
@@ -63,16 +65,19 @@ class OpenAICompatClient:
             kwargs["reasoning_effort"] = p.reasoning_effort
         return kwargs
 
-    async def stream_chat(self, messages: Sequence[Message]) -> AsyncIterator[LLMEvent]:
+    async def stream_chat(
+        self, messages: Sequence[Message], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[LLMEvent]:
         client = self._get_client()
         think = ThinkFilter()
+        calls = _ToolCallAssembler()
         model_name = self.profile.model
         finish_reason: str | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
 
         try:
-            stream = await client.chat.completions.create(**self._request_kwargs(messages))
+            stream = await client.chat.completions.create(**self._request_kwargs(messages, tools))
             async for chunk in stream:
                 model_name = getattr(chunk, "model", None) or model_name
                 if chunk.usage is not None:
@@ -86,6 +91,8 @@ class OpenAICompatClient:
                         visible = think.feed(text)
                         if visible:
                             yield Delta(visible)
+                    if choice.delta and choice.delta.tool_calls:
+                        calls.feed(choice.delta.tool_calls)
                     if choice.finish_reason:
                         finish_reason = choice.finish_reason
         except openai.APITimeoutError as exc:  # antes de APIConnectionError: é subclasse dela
@@ -124,6 +131,8 @@ class OpenAICompatClient:
         rest = think.flush()
         if rest:
             yield Delta(rest)
+        if calls:
+            yield ToolRequest(calls.result())
         yield Done(
             model=model_name,
             finish_reason=finish_reason,
@@ -149,6 +158,43 @@ class OpenAICompatClient:
             f"O provedor não reconheceu o modelo '{self.profile.model}'. "
             "Confira o nome em config/settings.toml. Detalhe: " + _short(exc)
         )
+
+
+class _ToolCallAssembler:
+    """Junta os pedidos de ferramenta que chegam em pedaços no streaming.
+
+    Na OpenAI, o primeiro pedaço traz `index`, `id` e o nome, e os seguintes
+    trazem fragmentos do JSON dos argumentos com o mesmo `index`. O Ollama e
+    o Gemini costumam mandar cada pedido inteiro num pedaço só, às vezes sem
+    `index`: nesse caso cada pedaço é um pedido novo.
+    """
+
+    def __init__(self) -> None:
+        self._slots: dict[Any, dict[str, str]] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._slots)
+
+    def feed(self, deltas: Any) -> None:
+        for d in deltas:
+            # getattr: servidores que omitem um campo deixam o atributo ausente no objeto do SDK
+            index = getattr(d, "index", None)
+            key = index if index is not None else f"sem-indice-{len(self._slots)}"
+            slot = self._slots.setdefault(key, {"id": "", "name": "", "arguments": ""})
+            if getattr(d, "id", None):
+                slot["id"] = d.id
+            fn = getattr(d, "function", None)
+            if fn is not None:
+                if fn.name:
+                    slot["name"] = fn.name
+                if fn.arguments:
+                    slot["arguments"] += fn.arguments
+
+    def result(self) -> list[ToolCall]:
+        return [
+            ToolCall(id=s["id"] or f"call_{i}", name=s["name"], arguments=s["arguments"] or "{}")
+            for i, s in enumerate(self._slots.values())
+        ]
 
 
 def _short(exc: Exception, limit: int = 300) -> str:

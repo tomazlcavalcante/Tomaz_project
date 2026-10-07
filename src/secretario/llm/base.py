@@ -1,19 +1,19 @@
 """Contrato do cliente de LLM.
 
 Qualquer implementação (Ollama, Gemini, um modelo falso nos testes) só
-precisa produzir esta sequência de eventos: zero ou mais `Delta` e,
-no fim, exatamente um `Done`. Na V1 entra um terceiro evento para pedidos
-de ferramenta.
+precisa produzir esta sequência de eventos: zero ou mais `Delta`, no
+máximo um `ToolRequest` (quando o modelo pede ferramentas) e, no fim,
+exatamente um `Done`.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from secretario.config import ModelProfile
-from secretario.core.types import Message
+from secretario.core.types import Message, ToolCall
 
 
 @dataclass
@@ -29,7 +29,14 @@ class Done:
     completion_tokens: int | None
 
 
-LLMEvent = Delta | Done
+@dataclass
+class ToolRequest:
+    """O modelo pediu uma ou mais ferramentas (os argumentos ainda não foram validados)."""
+
+    calls: list[ToolCall]
+
+
+LLMEvent = Delta | ToolRequest | Done
 
 
 class LLMError(Exception):
@@ -44,6 +51,7 @@ class LLMClient(Protocol):
     profile: ModelProfile
 
     def stream_chat(
-        self, messages: Sequence[Message]
+        self, messages: Sequence[Message], tools: list[dict[str, Any]] | None = None
     ) -> AsyncIterator[LLMEvent]:  # pragma: no cover - contrato
+        """`tools`: ferramentas oferecidas, no formato OpenAI; None = nenhuma."""
         ...

@@ -19,20 +19,25 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from secretario.config import ModelProfile
-from secretario.core.types import Message
-from secretario.llm.base import Delta, Done, LLMError
+from secretario.core.types import Message, ToolCall
+from secretario.llm.base import Delta, Done, LLMError, ToolRequest
 from secretario.llm.openai_compat import OpenAICompatClient
 
 RECEIVED: list[dict] = []
 
 
-def _chunk(content=None, finish=None, usage=None):
+def _chunk(content=None, finish=None, usage=None, tool_calls=None):
+    delta = {}
+    if content:
+        delta["content"] = content
+    if tool_calls:
+        delta["tool_calls"] = tool_calls
     body = {
         "id": "x",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "modelo-falso",
-        "choices": [] if usage else [{"index": 0, "delta": {"content": content} if content else {}, "finish_reason": finish}],
+        "choices": [] if usage else [{"index": 0, "delta": delta, "finish_reason": finish}],
     }
     if usage:
         body["usage"] = usage
@@ -47,6 +52,25 @@ async def chat(request: Request):
         return JSONResponse({"error": {"message": "model not found"}}, status_code=404)
     if model == "limitado":
         return JSONResponse({"error": {"message": "rate limit"}}, status_code=429)
+    if model == "ferramenta-em-pedacos":  # estilo OpenAI: argumentos fragmentados
+        pieces = [
+            _chunk(tool_calls=[{"index": 0, "id": "call_a", "type": "function", "function": {"name": "list_files", "arguments": ""}}]),
+            _chunk(tool_calls=[{"index": 0, "function": {"arguments": '{"pa'}}]),
+            _chunk(tool_calls=[{"index": 0, "function": {"arguments": 'th": "rel"}'}}]),
+            _chunk(tool_calls=[{"index": 1, "id": "call_b", "type": "function", "function": {"name": "get_datetime", "arguments": "{}"}}]),
+            _chunk(finish="tool_calls"),
+            "data: [DONE]\n\n",
+        ]
+        return StreamingResponse(iter(pieces), media_type="text/event-stream")
+    if model == "ferramenta-sem-indice":  # cada pedido inteiro num pedaço, sem "index" nem "id"
+        pieces = [
+            _chunk(content="Vou olhar."),
+            _chunk(tool_calls=[{"type": "function", "function": {"name": "list_files", "arguments": "{}"}}]),
+            _chunk(tool_calls=[{"type": "function", "function": {"name": "get_datetime", "arguments": "{}"}}]),
+            _chunk(finish="tool_calls"),
+            "data: [DONE]\n\n",
+        ]
+        return StreamingResponse(iter(pieces), media_type="text/event-stream")
 
     async def gen():
         for piece in ["<thi", "nk>pensando</th", "ink>Olá", ", mundo", "!"]:
@@ -135,3 +159,51 @@ async def test_connection_refused_hint():
     with pytest.raises(LLMError, match="Ollama está aberto") as info:
         await _run(client)
     assert info.value.kind == "connection"
+
+
+TOOLS = [{"type": "function", "function": {"name": "list_files", "description": "d", "parameters": {"type": "object"}}}]
+
+
+async def test_tool_calls_assembled_from_fragments(server_url):
+    RECEIVED.clear()
+    client = OpenAICompatClient(_profile(server_url, model="ferramenta-em-pedacos"))
+    events = [e async for e in client.stream_chat([Message(role="user", content="liste")], tools=TOOLS)]
+    request = next(e for e in events if isinstance(e, ToolRequest))
+    assert request.calls == [
+        ToolCall(id="call_a", name="list_files", arguments='{"path": "rel"}'),
+        ToolCall(id="call_b", name="get_datetime", arguments="{}"),
+    ]
+    assert isinstance(events[-1], Done) and events[-1].finish_reason == "tool_calls"
+    assert RECEIVED[-1]["body"]["tools"] == TOOLS
+
+
+async def test_tool_calls_without_index_or_id(server_url):
+    client = OpenAICompatClient(_profile(server_url, model="ferramenta-sem-indice"))
+    events = [e async for e in client.stream_chat([Message(role="user", content="liste")], tools=TOOLS)]
+    assert "".join(e.text for e in events if isinstance(e, Delta)) == "Vou olhar."
+    request = next(e for e in events if isinstance(e, ToolRequest))
+    assert [(c.id, c.name) for c in request.calls] == [("call_0", "list_files"), ("call_1", "get_datetime")]
+
+
+async def test_no_tools_key_when_none_offered(server_url):
+    RECEIVED.clear()
+    await _run(OpenAICompatClient(_profile(server_url)))
+    assert "tools" not in RECEIVED[-1]["body"]
+
+
+async def test_tool_messages_serialized_for_api(server_url):
+    RECEIVED.clear()
+    call = ToolCall(id="call_a", name="list_files", arguments="{}")
+    messages = [
+        Message(role="user", content="liste"),
+        Message(role="assistant", content="", tool_calls=[call]),
+        Message(role="tool", content='{"itens": []}', tool_call_id="call_a"),
+    ]
+    [e async for e in OpenAICompatClient(_profile(server_url)).stream_chat(messages)]
+    sent = RECEIVED[-1]["body"]["messages"]
+    assert sent[1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_a", "type": "function", "function": {"name": "list_files", "arguments": "{}"}}],
+    }
+    assert sent[2] == {"role": "tool", "content": '{"itens": []}', "tool_call_id": "call_a"}

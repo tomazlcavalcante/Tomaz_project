@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from secretario.core.context import TRUNCATION_MARK, build_context
+import pytest
+
+from secretario.core.context import TRUNCATION_MARK, ContextOverflow, build_context
 from secretario.core.session import Session
-from secretario.core.types import Message
+from secretario.core.types import Message, ToolCall
 
 
 def _session(*pairs: tuple[str, str]) -> Session:
@@ -59,3 +61,34 @@ def test_system_prompt_date_is_in_portuguese():
 
     text = render_system_prompt("BASE", datetime(2026, 10, 6, 18, 5))
     assert text.startswith("BASE") and "terça-feira, 06/10/2026 18:05" in text
+
+
+def _tool_turn(result: str) -> list[Message]:
+    call = ToolCall(id="c1", name="list_files", arguments="{}")
+    return [
+        Message(role="assistant", content="", tool_calls=[call]),
+        Message(role="tool", content=result, tool_call_id="c1"),
+    ]
+
+
+def test_pending_tool_messages_go_last_and_count_in_budget():
+    s = _session(("user", "a" * 100), ("assistant", "b" * 100), ("user", "pergunta"))
+    pending = _tool_turn("r" * 100)
+    ctx = build_context(s, "S", max_chars=1 + 8 + 100 + 10 + 2 + 100, max_messages=10, pending=pending)
+    # o resultado da ferramenta (100) e o pedido (12) tiram espaço do histórico antigo
+    assert [m.role for m in ctx.messages] == ["system", "user", "assistant", "tool"]
+    assert ctx.messages[1].content == "pergunta"
+    assert ctx.messages[-1].tool_call_id == "c1"
+    assert ctx.dropped == 2
+
+
+def test_reserved_chars_reduce_budget():
+    s = _session(("user", "a" * 100), ("assistant", "b" * 100), ("user", "c" * 50))
+    ctx = build_context(s, "S", max_chars=1 + 260, max_messages=10, reserved_chars=200)
+    assert [m.content[0] for m in ctx.messages[1:]] == ["c"]
+
+
+def test_pending_too_big_is_overflow():
+    s = _session(("user", "oi"))
+    with pytest.raises(ContextOverflow):
+        build_context(s, "S", max_chars=100, max_messages=10, pending=_tool_turn("r" * 500))
